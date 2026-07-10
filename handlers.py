@@ -943,34 +943,25 @@ async def callback_search_again(callback: types.CallbackQuery) -> None:
             # Консольные платформы
             deals = await search_console_game(query, device)
         else:
-            # PC или все платформы
-            deals = await search_deals(query, limit=100, target_currency=currency, target_platform=device)
+            # PC поиск
+            deals = await search_deals(query, limit=50, target_currency=currency, target_platform=device)
 
-            # Если выбрана платформа "all", добавляем консольные магазины
+            # Если выбрана платформа "all", добавляем ссылки на консоли (параллельно)
             if device == "all":
-                console_ps = await search_console_game(query, "ps")
-                console_xbox = await search_console_game(query, "xbox")
-                console_nintendo = await search_console_game(query, "nintendo")
-                deals.extend(console_ps)
-                deals.extend(console_xbox)
-                deals.extend(console_nintendo)
+                import asyncio
+                console_results = await asyncio.gather(
+                    search_console_game(query, "ps"),
+                    search_console_game(query, "xbox"),
+                    search_console_game(query, "nintendo"),
+                )
+                for result in console_results:
+                    deals.extend(result)
 
         if not deals:
             await callback.message.edit_text(f"❌ По запросу <b>{escape(query)}</b> ничего не найдено.")
             return
 
-        # Обогащаем сделки официальными ссылками (только для PC)
-        pc_deals = [d for d in deals if d.get("price_usd")]
-        if pc_deals:
-            pc_deals = await enrich_deals_with_official_links(pc_deals)
-            # Обновляем сделки
-            for i, deal in enumerate(deals):
-                if deal.get("price_usd"):
-                    for enriched in pc_deals:
-                        if enriched.get("link") == deal.get("link"):
-                            deals[i] = enriched
-                            break
-
+        # Формируем результат (без медленного обогащения ссылками)
         full_text = _format_deals_list(deals, query, currency)
         chunks = _chunk_text(full_text)
 
@@ -1012,17 +1003,19 @@ async def search_game_handler(message: types.Message) -> None:
             # Консольные платформы
             deals = await search_console_game(game_query, device)
         else:
-            # PC или все платформы
-            deals = await search_deals(game_query, limit=100, target_currency=currency, target_platform=device)
+            # PC поиск
+            deals = await search_deals(game_query, limit=50, target_currency=currency, target_platform=device)
 
-            # Если выбрана платформа "all", добавляем консольные магазины
+            # Если выбрана платформа "all", добавляем ссылки на консоли (параллельно)
             if device == "all":
-                console_ps = await search_console_game(game_query, "ps")
-                console_xbox = await search_console_game(game_query, "xbox")
-                console_nintendo = await search_console_game(game_query, "nintendo")
-                deals.extend(console_ps)
-                deals.extend(console_xbox)
-                deals.extend(console_nintendo)
+                import asyncio
+                console_results = await asyncio.gather(
+                    search_console_game(game_query, "ps"),
+                    search_console_game(game_query, "xbox"),
+                    search_console_game(game_query, "nintendo"),
+                )
+                for result in console_results:
+                    deals.extend(result)
 
         if not deals:
             games = await search_games(game_query, limit=10)
@@ -1043,18 +1036,7 @@ async def search_game_handler(message: types.Message) -> None:
             await status_message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             return
 
-        # Обогащаем сделки официальными ссылками (только для PC)
-        pc_deals = [d for d in deals if d.get("price_usd")]
-        if pc_deals:
-            pc_deals = await enrich_deals_with_official_links(pc_deals)
-            # Обновляем сделки
-            for i, deal in enumerate(deals):
-                if deal.get("price_usd"):
-                    for enriched in pc_deals:
-                        if enriched.get("link") == deal.get("link"):
-                            deals[i] = enriched
-                            break
-
+        # Формируем результат (без медленного обогащения ссылками)
         full_text = _format_deals_list(deals, game_query, currency)
         chunks = _chunk_text(full_text)
 
