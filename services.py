@@ -232,6 +232,38 @@ CONSOLE_STORES = {
     },
 }
 
+
+def _build_store_link(store_name: str, steam_app_id: str | None, game_title: str) -> str:
+    """Построить прямую ссылку на магазин."""
+    store_lower = store_name.lower()
+
+    # Steam
+    if "steam" in store_lower and steam_app_id:
+        return f"https://store.steampowered.com/app/{steam_app_id}/"
+
+    # GOG
+    if "gog" in store_lower:
+        return f"https://www.gog.com/games?query={quote_plus(game_title)}"
+
+    # Epic Games
+    if "epic" in store_lower:
+        return f"https://store.epicgames.com/en-US/browse?q={quote_plus(game_title)}&sortBy=relevancy&sortDir=DESC&count=40"
+
+    # Humble Bundle
+    if "humble" in store_lower:
+        return f"https://www.humblebundle.com/store/search?search={quote_plus(game_title)}"
+
+    # Fanatical
+    if "fanatical" in store_lower:
+        return f"https://www.fanatical.com/en/search?search={quote_plus(game_title)}"
+
+    # Ubisoft
+    if "ubisoft" in store_lower:
+        return f"https://store.ubi.com/search?query={quote_plus(game_title)}"
+
+    # Fallback — поиск в Google
+    return f"https://www.google.com/search?q={quote_plus(game_title + ' buy ' + store_name)}"
+
 # --- Exchange rate cache ---
 _rate_cache: dict[str, float] = {}
 _rate_cache_time: float = 0
@@ -363,11 +395,18 @@ async def get_game_deals(
                     # Прямая ссылка: Steam через steamAppID, остальные — CheapShark redirect
                     if store_id == "1" and steam_app_id:
                         link = f"https://store.steampowered.com/app/{steam_app_id}/"
+                    elif steam_app_id:
+                        # Ищем магазин в STORE_PLATFORM_MAP чтобы построить ссылку
+                        store_name = stores.get(store_id, {}).get("name", "")
+                        link = _build_store_link(store_name, steam_app_id, game_title)
                     else:
                         link = f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}"
 
                     # Ссылка на страницу игры
-                    game_link = f"https://store.steampowered.com/app/{steam_app_id}/" if steam_app_id else f"https://www.cheapshark.com/redirect?gameID={game_id}"
+                    if steam_app_id:
+                        game_link = f"https://store.steampowered.com/app/{steam_app_id}/"
+                    else:
+                        game_link = _build_store_link(stores.get(store_id, {}).get("name", ""), None, game_title)
 
                     results.append({
                         "title": game_title,
@@ -469,14 +508,19 @@ async def search_deals(
                     game_title = deal.get("title", "Без названия")
                     steam_id = steam_ids.get(game_title.lower())
 
-                    # Прямая Steam-ссылка или CheapShark redirect
+                    # Прямая Steam-ссылка или ссылка на магазин
                     if store_id == "1" and steam_id:
                         link = f"https://store.steampowered.com/app/{steam_id}/"
+                    elif steam_id:
+                        link = _build_store_link(store_info["name"], steam_id, game_title)
                     else:
                         link = f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}"
 
                     # Ссылка на страницу игры
-                    game_link = f"https://store.steampowered.com/app/{steam_id}/" if steam_id else f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}"
+                    if steam_id:
+                        game_link = f"https://store.steampowered.com/app/{steam_id}/"
+                    else:
+                        game_link = _build_store_link(store_info["name"], None, game_title)
 
                     results.append({
                         "title": game_title,
