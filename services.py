@@ -882,3 +882,59 @@ async def search_all_platforms(game_title: str, target_platform: str = "all", ta
                 results.extend(console_results)
 
     return results
+
+
+# ─────────────── Все сделки для региона ───────────────
+
+async def get_regional_deals(game_title: str, target_currency: str = "USD", filter_region: str = "global") -> list[dict]:
+    """Получить ВСЕ сделки для конкретного региона с ссылками."""
+    async with aiohttp.ClientSession() as session:
+        stores = await _fetch_stores(session)
+        rates = await _get_exchange_rates(session)
+
+        try:
+            async with session.get(
+                f"{CHEAPSHARK_BASE}/deals",
+                params={"title": game_title, "limit": 100, "sortBy": "Price", "desc": 0},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+
+                deals = await resp.json()
+
+                # Фильтруем по региону и собираем все сделки
+                result = []
+                for deal in deals:
+                    store_id = int(deal.get("storeID", 0))
+                    store_info = REGION_MAP.get(store_id, {"region": "🌍 Steam", "name": "Steam", "country": "global"})
+
+                    country = store_info.get("country", "global")
+
+                    # Фильтр по региону
+                    if filter_region != "global":
+                        if country != filter_region and country != "global":
+                            continue
+
+                    usd_price = float(deal.get("salePrice", 0))
+                    converted = convert_price(usd_price, target_currency, rates)
+
+                    result.append({
+                        "title": deal.get("title", game_title),
+                        "store": store_info["name"],
+                        "region": store_info["region"],
+                        "price_usd": usd_price,
+                        "price_converted": converted,
+                        "savings": round(float(deal.get("savings", 0)), 1),
+                        "link": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}",
+                        "normal_price": deal.get("normalPrice", "?"),
+                    })
+
+                # Сортируем по цене
+                result.sort(key=lambda x: x.get("price_converted") or x.get("price_usd", 9999))
+
+                return result
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении сделок для региона: {e}")
+            return []

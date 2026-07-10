@@ -4,6 +4,8 @@ import sys
 from os import getenv
 from dotenv import load_dotenv
 
+from aiohttp import web
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -12,6 +14,26 @@ from aiogram.enums import ParseMode
 from database import init_db, get_all_active_alerts, trigger_alert, get_user_profile, CURRENCIES
 from handlers import router
 from services import get_best_price, convert_price, _get_exchange_rates
+
+
+# ─────────────── Веб-сервер для пинга ───────────────
+
+async def handle_ping(request):
+    """Обработчик для пинга (UptimeRobot и др.)"""
+    return web.Response(text="PlayScan Bot is running!", status=200)
+
+
+async def start_web_server():
+    """Запуск простого веб-сервера для пинга."""
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/ping", handle_ping)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    logging.info("Веб-сервер запущен на порту 8080 для пинга")
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
@@ -162,6 +184,9 @@ async def main() -> None:
         await bot.delete_webhook(drop_pending_updates=True)
 
         logging.info("Бот успешно запущен и начинает опрос серверов Telegram (Polling)...")
+
+        # Запускаем веб-сервер для пинга
+        await start_web_server()
 
         # Запускаем фоновую задачу проверки алертов
         asyncio.create_task(check_alerts_periodically())

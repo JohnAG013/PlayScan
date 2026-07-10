@@ -358,20 +358,48 @@ async def command_region_handler(message: types.Message) -> None:
             )
             return
 
-        text = f"🌍 <b>{escape(game_title)}</b>{region_label}\n\n"
+        # Если указан регион — показываем все предложения в этом регионе
+        if filter_region:
+            # Получаем все сделки для этого региона
+            all_deals = await get_regional_deals(game_title, currency, filter_region)
 
-        for i, region in enumerate(regional_prices[:10], 1):
-            price = region["best_price_converted"] or region["best_price_usd"]
-            savings = region["savings"]
-            discount = f" (-{savings:.0f}%)" if savings > 0 else ""
+            if not all_deals:
+                await status_message.edit_text(
+                    f"❌ По запросу <b>{escape(game_title)}</b> в регионе {filter_region} цены не найдены."
+                )
+                return
 
-            text += (
-                f"<b>{i}. {region['region']}</b>\n"
-                f"    💰 <b>{cur_symbol}{price}</b> ({region['store']}){discount}\n"
-                f"    📊 Предложений: {region['total_deals']}\n\n"
-            )
+            region_name = ALL_REGIONS.get(filter_region, {}).get("name", filter_region)
+            text = f"🌍 <b>{escape(game_title)}</b> — {region_name}\n\n"
 
-        text += "💰 <i>Сортировка: от дешёвых к дорогим</i>"
+            for i, deal in enumerate(all_deals[:15], 1):
+                price = deal.get("price_converted") or deal.get("price_usd", "?")
+                savings = deal.get("savings", 0)
+                discount = f" (-{savings:.0f}%)" if savings > 0 else ""
+                store = deal.get("store", "Магазин")
+                link = deal.get("link", "#")
+
+                text += f"<b>{i}. {store}</b>\n"
+                text += f"    💰 <b>{cur_symbol}{price}</b>{discount}\n"
+                text += f"    🔗 <a href=\"{link}\">Купить</a>\n\n"
+
+            text += f"💰 <i>Всего предложений: {len(all_deals)}</i>"
+        else:
+            # Без фильтра — общая сводка по регионам
+            text = f"🌍 <b>{escape(game_title)}</b>\n\n"
+
+            for i, region in enumerate(regional_prices[:10], 1):
+                price = region["best_price_converted"] or region["best_price_usd"]
+                savings = region["savings"]
+                discount = f" (-{savings:.0f}%)" if savings > 0 else ""
+
+                text += (
+                    f"<b>{i}. {region['region']}</b>\n"
+                    f"    💰 <b>{cur_symbol}{price}</b> ({region['store']}){discount}\n"
+                    f"    📊 Предложений: {region['total_deals']}\n\n"
+                )
+
+            text += "💰 <i>Сортировка: от дешёвых к дорогим</i>"
 
         await status_message.edit_text(text, disable_web_page_preview=True)
 
