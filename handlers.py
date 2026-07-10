@@ -10,7 +10,7 @@ from database import (
     CURRENCIES, DEVICES, can_search, increment_search_count,
     add_alert, get_user_alerts, remove_alert,
 )
-from services import search_games, get_game_deals, search_deals, get_stores_list, enrich_deals_with_official_links, check_subscription, get_regional_prices, ALL_REGIONS
+from services import search_games, get_game_deals, search_deals, get_stores_list, enrich_deals_with_official_links, get_regional_prices, ALL_REGIONS, search_console_game
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -37,24 +37,36 @@ def _format_deals_list(deals: list[dict], title: str, currency: str) -> str:
     text += "\n"
 
     for i, deal in enumerate(deals, 1):
-        savings = deal["savings"]
-        discount_tag = f" (-{savings:.0f}%)" if savings > 0 else ""
         plat = PLATFORM_LABELS.get(deal["platform"], deal["platform"])
 
-        price_line = f"${deal['price_usd']}"
-        if deal["price_converted"] and currency != "USD":
-            price_line += f" / {cur_symbol}{deal['price_converted']}"
+        # Для консольных игр (нет цены в API)
+        if deal.get("note"):
+            store_link = f"<a href=\"{deal['link']}\">{escape(deal['store'])}</a>"
+            game_link = f"<a href=\"{deal['link']}\">{escape(deal['title'])}</a>"
 
-        store_link = f"<a href=\"{deal['link']}\">{escape(deal['store'])}</a>"
+            text += (
+                f"<b>{i}.</b> {game_link}\n"
+                f"    🏪 {store_link} • {plat}\n"
+                f"    💰 <i>{deal['note']}</i>\n\n"
+            )
+        else:
+            # Для PC игр с ценами
+            savings = deal.get("savings", 0)
+            discount_tag = f" (-{savings:.0f}%)" if savings > 0 else ""
 
-        game_url = deal.get("official_link") or deal.get("game_link", deal['link'])
-        game_link = f"<a href=\"{game_url}\">{escape(deal['title'])}</a>"
+            price_line = f"${deal.get('price_usd', '?')}"
+            if deal.get("price_converted") and currency != "USD":
+                price_line += f" / {cur_symbol}{deal['price_converted']}"
 
-        text += (
-            f"<b>{i}.</b> {game_link}\n"
-            f"    🏪 {store_link} • {plat}\n"
-            f"    💰 <b>{price_line}</b>{discount_tag}\n\n"
-        )
+            store_link = f"<a href=\"{deal['link']}\">{escape(deal['store'])}</a>"
+            game_url = deal.get("official_link") or deal.get("game_link", deal.get('link', ''))
+            game_link = f"<a href=\"{game_url}\">{escape(deal['title'])}</a>"
+
+            text += (
+                f"<b>{i}.</b> {game_link}\n"
+                f"    🏪 {store_link} • {plat}\n"
+                f"    💰 <b>{price_line}</b>{discount_tag}\n\n"
+            )
 
     return text
 
@@ -633,8 +645,11 @@ async def command_profile_handler(message: types.Message) -> None:
             [InlineKeyboardButton(text=f"🌍 Регион: {region_label}", callback_data="profile:region")],
         ])
 
+        username = profile.get("username", "") if profile else ""
+        username_display = f" ({username})" if username else ""
+
         await message.answer(
-            f"👤 <b>Твой профиль:</b>\n\n"
+            f"👤 <b>Твой профиль{username_display}:</b>\n\n"
             f"🏷️ Роль: <b>{role_label}</b>\n"
             f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
             f"📱 Устройство: <b>{dev_label}</b>\n"
@@ -678,7 +693,47 @@ async def callback_set_currency(callback: types.CallbackQuery) -> None:
             return
         await set_user_currency(callback.from_user.id, currency)
         symbol = CURRENCIES[currency]
-        await callback.message.edit_text(f"✅ Валюта изменена на <b>{currency}</b> ({symbol})")
+
+        # Показываем профиль
+        profile = await get_user_profile(callback.from_user.id)
+        username = profile.get("username", "") if profile else ""
+        username_display = f" ({username})" if username else ""
+
+        cur = profile["currency"] if profile else "USD"
+        dev = profile["device"] if profile else "all"
+        region = profile.get("region", "global") if profile else "global"
+        role = profile.get("role", "user") if profile else "user"
+        cur_symbol = CURRENCIES.get(cur, cur)
+        dev_label = PLATFORM_LABELS.get(dev, dev)
+
+        from services import ALL_REGIONS
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
+
+        ROLE_LABELS = {
+            "user": "👤 Пользователь",
+            "admin": "🛡️ Админ",
+            "premium": "⭐ Премиум",
+            "creator": "👑 Создатель",
+        }
+        role_label = ROLE_LABELS.get(role, role)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
+            [InlineKeyboardButton(text=f"📱 Устройство: {dev_label}", callback_data="profile:device")],
+            [InlineKeyboardButton(text=f"🌍 Регион: {region_label}", callback_data="profile:region")],
+        ])
+
+        await callback.message.edit_text(
+            f"✅ <b>Выбрано:</b> Валюта {currency} ({symbol})\n\n"
+            f"👤 <b>Твой профиль{username_display}:</b>\n\n"
+            f"🏷️ Роль: <b>{role_label}</b>\n"
+            f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
+            f"📱 Устройство: <b>{dev_label}</b>\n"
+            f"🌍 Регион: <b>{region_label}</b>\n\n"
+            f"Нажми кнопку ниже, чтобы изменить.",
+            reply_markup=keyboard,
+        )
     except Exception as e:
         logger.error(f"Ошибка в set_currency: {e}")
     finally:
@@ -711,7 +766,47 @@ async def callback_set_device(callback: types.CallbackQuery) -> None:
             return
         await set_user_device(callback.from_user.id, device)
         label = PLATFORM_LABELS.get(device, device)
-        await callback.message.edit_text(f"✅ Платформа изменена на <b>{label}</b>")
+
+        # Показываем профиль
+        profile = await get_user_profile(callback.from_user.id)
+        username = profile.get("username", "") if profile else ""
+        username_display = f" ({username})" if username else ""
+
+        cur = profile["currency"] if profile else "USD"
+        dev = profile["device"] if profile else "all"
+        region = profile.get("region", "global") if profile else "global"
+        role = profile.get("role", "user") if profile else "user"
+        cur_symbol = CURRENCIES.get(cur, cur)
+        dev_label = PLATFORM_LABELS.get(dev, dev)
+
+        from services import ALL_REGIONS
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
+
+        ROLE_LABELS = {
+            "user": "👤 Пользователь",
+            "admin": "🛡️ Админ",
+            "premium": "⭐ Премиум",
+            "creator": "👑 Создатель",
+        }
+        role_label = ROLE_LABELS.get(role, role)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
+            [InlineKeyboardButton(text=f"📱 Устройство: {dev_label}", callback_data="profile:device")],
+            [InlineKeyboardButton(text=f"🌍 Регион: {region_label}", callback_data="profile:region")],
+        ])
+
+        await callback.message.edit_text(
+            f"✅ <b>Выбрано:</b> Платформа {label}\n\n"
+            f"👤 <b>Твой профиль{username_display}:</b>\n\n"
+            f"🏷️ Роль: <b>{role_label}</b>\n"
+            f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
+            f"📱 Устройство: <b>{dev_label}</b>\n"
+            f"🌍 Регион: <b>{region_label}</b>\n\n"
+            f"Нажми кнопку ниже, чтобы изменить.",
+            reply_markup=keyboard,
+        )
     except Exception as e:
         logger.error(f"Ошибка в set_device: {e}")
     finally:
@@ -757,7 +852,46 @@ async def callback_set_region(callback: types.CallbackQuery) -> None:
 
         await set_user_region(callback.from_user.id, region)
         region_name = ALL_REGIONS[region]["name"]
-        await callback.message.edit_text(f"✅ Регион изменён на <b>{region_name}</b>")
+
+        # Показываем профиль
+        profile = await get_user_profile(callback.from_user.id)
+        username = profile.get("username", "") if profile else ""
+        username_display = f" ({username})" if username else ""
+
+        cur = profile["currency"] if profile else "USD"
+        dev = profile["device"] if profile else "all"
+        region = profile.get("region", "global") if profile else "global"
+        role = profile.get("role", "user") if profile else "user"
+        cur_symbol = CURRENCIES.get(cur, cur)
+        dev_label = PLATFORM_LABELS.get(dev, dev)
+
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
+
+        ROLE_LABELS = {
+            "user": "👤 Пользователь",
+            "admin": "🛡️ Админ",
+            "premium": "⭐ Премиум",
+            "creator": "👑 Создатель",
+        }
+        role_label = ROLE_LABELS.get(role, role)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
+            [InlineKeyboardButton(text=f"📱 Устройство: {dev_label}", callback_data="profile:device")],
+            [InlineKeyboardButton(text=f"🌍 Регион: {region_label}", callback_data="profile:region")],
+        ])
+
+        await callback.message.edit_text(
+            f"✅ <b>Выбрано:</b> Регион {region_name}\n\n"
+            f"👤 <b>Твой профиль{username_display}:</b>\n\n"
+            f"🏷️ Роль: <b>{role_label}</b>\n"
+            f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
+            f"📱 Устройство: <b>{dev_label}</b>\n"
+            f"🌍 Регион: <b>{region_label}</b>\n\n"
+            f"Нажми кнопку ниже, чтобы изменить.",
+            reply_markup=keyboard,
+        )
     except Exception as e:
         logger.error(f"Ошибка в set_region: {e}")
     finally:
@@ -776,13 +910,38 @@ async def callback_search_again(callback: types.CallbackQuery) -> None:
         currency = profile["currency"] if profile else "USD"
         device = profile["device"] if profile else "all"
 
-        deals = await search_deals(query, limit=100, target_currency=currency, target_platform=device)
+        # Поиск в зависимости от платформы
+        if device in ("ps", "xbox", "nintendo"):
+            # Консольные платформы
+            deals = await search_console_game(query, device)
+        else:
+            # PC или все платформы
+            deals = await search_deals(query, limit=100, target_currency=currency, target_platform=device)
+
+            # Если выбрана платформа "all", добавляем консольные магазины
+            if device == "all":
+                console_ps = await search_console_game(query, "ps")
+                console_xbox = await search_console_game(query, "xbox")
+                console_nintendo = await search_console_game(query, "nintendo")
+                deals.extend(console_ps)
+                deals.extend(console_xbox)
+                deals.extend(console_nintendo)
+
         if not deals:
             await callback.message.edit_text(f"❌ По запросу <b>{escape(query)}</b> ничего не найдено.")
             return
 
-        # Обогащаем сделки официальными ссылками (параллельно)
-        deals = await enrich_deals_with_official_links(deals)
+        # Обогащаем сделки официальными ссылками (только для PC)
+        pc_deals = [d for d in deals if d.get("price_usd")]
+        if pc_deals:
+            pc_deals = await enrich_deals_with_official_links(pc_deals)
+            # Обновляем сделки
+            for i, deal in enumerate(deals):
+                if deal.get("price_usd"):
+                    for enriched in pc_deals:
+                        if enriched.get("link") == deal.get("link"):
+                            deals[i] = enriched
+                            break
 
         full_text = _format_deals_list(deals, query, currency)
         chunks = _chunk_text(full_text)
@@ -820,10 +979,22 @@ async def search_game_handler(message: types.Message) -> None:
             f"🔍 Ищу: <b>{escape(game_query)}</b>...",
         )
 
-        # Увеличиваем счётчик
-        remaining = increment_search_count(user_id)
+        # Поиск в зависимости от платформы
+        if device in ("ps", "xbox", "nintendo"):
+            # Консольные платформы
+            deals = await search_console_game(game_query, device)
+        else:
+            # PC или все платформы
+            deals = await search_deals(game_query, limit=100, target_currency=currency, target_platform=device)
 
-        deals = await search_deals(game_query, limit=100, target_currency=currency, target_platform=device)
+            # Если выбрана платформа "all", добавляем консольные магазины
+            if device == "all":
+                console_ps = await search_console_game(game_query, "ps")
+                console_xbox = await search_console_game(game_query, "xbox")
+                console_nintendo = await search_console_game(game_query, "nintendo")
+                deals.extend(console_ps)
+                deals.extend(console_xbox)
+                deals.extend(console_nintendo)
 
         if not deals:
             games = await search_games(game_query, limit=10)
@@ -844,8 +1015,17 @@ async def search_game_handler(message: types.Message) -> None:
             await status_message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             return
 
-        # Обогащаем сделки официальными ссылками (параллельно)
-        deals = await enrich_deals_with_official_links(deals)
+        # Обогащаем сделки официальными ссылками (только для PC)
+        pc_deals = [d for d in deals if d.get("price_usd")]
+        if pc_deals:
+            pc_deals = await enrich_deals_with_official_links(pc_deals)
+            # Обновляем сделки
+            for i, deal in enumerate(deals):
+                if deal.get("price_usd"):
+                    for enriched in pc_deals:
+                        if enriched.get("link") == deal.get("link"):
+                            deals[i] = enriched
+                            break
 
         full_text = _format_deals_list(deals, game_query, currency)
         chunks = _chunk_text(full_text)

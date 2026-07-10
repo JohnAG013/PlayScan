@@ -213,6 +213,25 @@ STORE_PLATFORM_MAP = {
     35: "pc",   # DreamGame
 }
 
+# Консольные магазины (для поиска ссылок)
+CONSOLE_STORES = {
+    "ps": {
+        "name": "PlayStation Store",
+        "emoji": "🎮",
+        "url_template": "https://store.playstation.com/search/{query}",
+    },
+    "xbox": {
+        "name": "Xbox Store",
+        "emoji": "🟩",
+        "url_template": "https://www.xbox.com/games/store/search?q={query}",
+    },
+    "nintendo": {
+        "name": "Nintendo eShop",
+        "emoji": "🔴",
+        "url_template": "https://www.nintendo.com/us/search/#q={query}&p=1&cat=gme",
+    },
+}
+
 # --- Exchange rate cache ---
 _rate_cache: dict[str, float] = {}
 _rate_cache_time: float = 0
@@ -814,3 +833,52 @@ async def get_best_price(game_title: str) -> dict | None:
         except Exception as e:
             logger.error(f"Ошибка при проверке цены для алерта: {e}")
             return None
+
+
+# ─────────────── Консольные магазины ───────────────
+
+async def search_console_game(game_title: str, platform: str) -> list[dict]:
+    """Поиск игры в консольном магазине."""
+    if platform not in CONSOLE_STORES:
+        return []
+
+    store_info = CONSOLE_STORES[platform]
+    store_name = store_info["name"]
+    store_emoji = store_info["emoji"]
+
+    try:
+        # Формируем ссылку на поиск
+        search_url = store_info["url_template"].format(query=quote_plus(game_title))
+
+        # Возвращаем ссылку на магазин
+        return [{
+            "title": game_title,
+            "store": f"{store_emoji} {store_name}",
+            "platform": platform,
+            "link": search_url,
+            "note": "Перейди по ссылке чтобы увидеть цену",
+        }]
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска в {store_name}: {e}")
+        return []
+
+
+async def search_all_platforms(game_title: str, target_platform: str = "all", target_currency: str = "USD") -> list[dict]:
+    """Поиск игры на всех платформах."""
+    results = []
+
+    # PC через CheapShark
+    if target_platform in ("all", "pc"):
+        pc_deals = await search_deals(game_title, limit=20, target_currency=target_currency, target_platform="pc")
+        results.extend(pc_deals)
+
+    # Консоли
+    console_platforms = ["ps", "xbox", "nintendo"]
+    if target_platform in ("all",) + tuple(console_platforms):
+        for platform in console_platforms:
+            if target_platform in ("all", platform):
+                console_results = await search_console_game(game_title, platform)
+                results.extend(console_results)
+
+    return results
