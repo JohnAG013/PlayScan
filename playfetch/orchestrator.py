@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import List
@@ -21,6 +22,55 @@ PLATFORM_PARSER_MAP = {
     "Xbox Series X|S": ["XboxParser"],
     "Switch": ["NintendoParser"],
 }
+
+
+def _generate_query_variants(query: str) -> list[str]:
+    """Генерирует варианты запроса для обработки опечаток.
+
+    "Five nights at Fraddy's" → варианты для поиска.
+    """
+    variants = [query]
+
+    # Убираем апострофы
+    cleaned = re.sub(r"[''`]", "", query)
+    if cleaned != query:
+        variants.append(cleaned)
+
+    words = query.split()
+    if words:
+        last = words[-1]
+        # Убираем последние 1-3 символа
+        for cut in [1, 2, 3]:
+            if len(last) > cut + 1:
+                truncated = last[:-cut]
+                variant = " ".join(words[:-1] + [truncated])
+                variants.append(variant)
+
+    # Пробуем только ключевые слова (без предлогов)
+    stopwords = {"at", "the", "a", "an", "in", "on", "of", "for", "to"}
+    key_words = [w for w in words if w.lower() not in stopwords]
+    if key_words and key_words != words:
+        variants.append(" ".join(key_words))
+
+    # Пробуем без последнего слова (если оно короткое или с опечаткой)
+    if len(words) > 2:
+        variants.append(" ".join(words[:-1]))
+
+    # Пробуем без предлогов и последнего слова
+    if len(key_words) > 1:
+        variants.append(" ".join(key_words[:-1]))
+        variants.append(" ".join(key_words))
+
+    # Дедупликация
+    seen = set()
+    unique = []
+    for v in variants:
+        v_lower = v.lower().strip()
+        if v_lower not in seen and len(v_lower) >= 2:
+            seen.add(v_lower)
+            unique.append(v)
+
+    return unique
 
 # Время жизни кэша — 24 часа
 _CACHE_TTL = 24 * 60 * 60
@@ -115,15 +165,37 @@ class PlayFetchOrchestrator:
         if not parser_names:
             parser_names = set(self._by_name.keys())
 
-        tasks = [
-            self._safe_search(self._by_name[name], game_name, regions)
-            for name in parser_names
-        ]
-        raw_results = await asyncio.gather(*tasks)
-        all_products = [item for batch in raw_results for item in batch]
+        # Генерируем варианты запроса для обработки опечаток
+        query_variants = _generate_query_variants(game_name)
 
-        # Fuzzy-фильтрация
-        all_products = fuzzy_filter(all_products, game_name, threshold=0.55)
+        all_products: list[GameProduct] = []
+        seen_titles: set[str] = set()
+
+        # Пробуем каждый вариант запроса
+        for variant in query_variants:
+            tasks = [
+                self._safe_search(self._by_name[name], variant, regions)
+                for name in parser_names
+            ]
+            raw_results = await asyncio.gather(*tasks)
+            variant_products = [item for batch in raw_results for item in batch]
+
+            # Фильтруем дубликаты и пропускаем мусор
+            for p in variant_products:
+                title_key = f"{p.title.lower()}|{p.url}"
+                if title_key not in seen_titles:
+                    seen_titles.add(title_key)
+                    all_products.append(p)
+
+            # Если нашли релевантные результаты — останавливаемся
+            relevant = fuzzy_filter(all_products, game_name, threshold=0.45)
+            if relevant:
+                all_products = relevant
+                break
+
+        # Финальная fuzzy-фильтрация с оригинальным запросом
+        if not all_products:
+            all_products = fuzzy_filter(all_products, game_name, threshold=0.45)
 
         # Сортировка
         def sort_key(p: GameProduct) -> tuple[int, float]:

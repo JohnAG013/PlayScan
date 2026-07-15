@@ -6,9 +6,6 @@
 
 import asyncio
 import logging
-import time
-import json
-from pathlib import Path
 
 from playfetch import (
     PlayFetchOrchestrator,
@@ -19,50 +16,9 @@ from playfetch import (
     NintendoParser,
 )
 from playfetch.models import GameProduct
+from database import get_cached_game, cache_game
 
 logger = logging.getLogger(__name__)
-
-# Кэш на 24 часа
-_CACHE_TTL = 24 * 60 * 60
-_cache: dict[str, dict] = {}
-_CACHE_FILE = Path("playfetch_cache.json")
-
-
-def _load_cache() -> dict:
-    if _CACHE_FILE.exists():
-        try:
-            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def _save_cache(cache: dict) -> None:
-    try:
-        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        logger.warning(f"Failed to save cache: {e}")
-
-
-def _get_cached(key: str) -> list[dict] | None:
-    entry = _cache.get(key)
-    if not entry:
-        return None
-    ts = entry.get("timestamp", 0)
-    if time.time() - ts > _CACHE_TTL:
-        return None
-    return entry.get("data")
-
-
-def _set_cached(key: str, data: list[dict]) -> None:
-    _cache[key] = {"timestamp": time.time(), "data": data}
-    _save_cache(_cache)
-
-
-# Загружаем кэш при старте
-_cache = _load_cache()
 
 
 def _build_orchestrator() -> PlayFetchOrchestrator:
@@ -162,15 +118,35 @@ async def search_playfetch(
 
     Возвращает список сделок в формате бота.
     """
-    cache_key = f"pf|{query.lower()}|{user_region}|{device}"
-    cached = _get_cached(cache_key)
-    if cached is not None:
-        logger.info(f"PlayFetch cache hit: {query}")
-        return cached
-
     regions = _region_to_playfetch(user_region)
     platforms = _platform_to_playfetch(device)
 
+    # Проверяем кэш в Google Sheets для каждого региона и платформы
+    cached_deals = []
+    for region in regions:
+        for platform in platforms:
+            cached = await get_cached_game(query, "PlayFetch", region, platform)
+            if cached:
+                deal = {
+                    "title": cached["title"],
+                    "price_usd": f"{cached['raw_price']:.2f}" if cached["raw_price"] else "?",
+                    "price_converted": None,
+                    "currency": cached["currency"],
+                    "normal_price": "?",
+                    "savings": 0,
+                    "store": cached["store"],
+                    "platform": _platform_to_bot(platform),
+                    "link": cached["url"],
+                    "game_link": cached["url"],
+                    "metacritic": None,
+                }
+                cached_deals.append(deal)
+
+    if cached_deals:
+        logger.info(f"Google Sheets cache hit: {query}")
+        return cached_deals
+
+    # Если нет в кэше — ищем через PlayFetch
     orch = _build_orchestrator()
 
     try:
@@ -187,12 +163,48 @@ async def search_playfetch(
 
     deals = [_product_to_deal(p) for p in products]
 
+    # Сохраняем в кэш Google Sheets
+    for deal in deals:
+        platform_db = _platform_to_db(deal["platform"])
+        await cache_game(
+            game_name=query,
+            store=deal["store"],
+            region=user_region.upper(),
+            platform=platform_db,
+            title=deal["title"],
+            price=deal["price_usd"],
+            raw_price=float(deal["price_usd"]) if deal["price_usd"] not in ("?", "", None) else None,
+            currency=deal["currency"],
+            url=deal["link"],
+        )
+
     # Сортируем по цене
     deals.sort(
         key=lambda x: float(x["price_usd"]) if x["price_usd"] not in ("?", "", None) else 9999
     )
 
-    if deals:
-        _set_cached(cache_key, deals)
-
     return deals
+
+
+def _platform_to_bot(platform: str) -> str:
+    """Конвертирует платформу PlayFetch в формат бота."""
+    mapping = {
+        "PC": "pc",
+        "PS5": "ps",
+        "PS4": "ps",
+        "Xbox Series X|S": "xbox",
+        "Xbox One": "xbox",
+        "Switch": "nintendo",
+    }
+    return mapping.get(platform, "pc")
+
+
+def _platform_to_db(platform: str) -> str:
+    """Конвертирует платформу бота в формат для БД."""
+    mapping = {
+        "pc": "PC",
+        "ps": "PS5",
+        "xbox": "Xbox Series X|S",
+        "nintendo": "Switch",
+    }
+    return mapping.get(platform, "PC")
