@@ -192,6 +192,27 @@ GAMES_IN_SUBSCRIPTIONS = {
 # --- Store cache ---
 _store_cache: dict[int, dict] = {}  # storeID -> {name, platform}
 
+# Маппинг storeID → прямые ссылки (вместо CheapShark redirect)
+STORE_LINK_MAP = {
+    1: "https://store.steampowered.com/app/{steam_app_id}/",  # Steam
+    7: "https://www.gog.com/games?query={query}",              # GOG
+    11: "https://www.humblebundle.com/store/search?search={query}",  # Humble
+    13: "https://store.ubi.com/search?query={query}",          # Ubisoft
+    15: "https://www.fanatical.com/en/search?search={query}",  # Fanatical
+    21: "https://www.google.com/search?q={query}+buy+WinGameStore",  # WinGameStore
+    23: "https://www.google.com/search?q={query}+buy+GameBillet",    # GameBillet
+    24: "https://www.google.com/search?q={query}+buy+Voidu",         # Voidu
+    25: "https://store.epicgames.com/en-US/browse?q={query}&sortBy=relevancy&sortDir=DESC&count=40",  # Epic
+    27: "https://www.google.com/search?q={query}+buy+Gamesplanet",   # Gamesplanet
+    28: "https://www.google.com/search?q={query}+buy+Gamesload",     # Gamesload
+    29: "https://www.google.com/search?q={query}+buy+2Game",         # 2Game
+    30: "https://www.google.com/search?q={query}+buy+IndieGala",     # IndieGala
+    31: "https://www.google.com/search?q={query}+buy+Bluesky",       # Bluesky
+    33: "https://www.google.com/search?q={query}+buy+DLGamer",       # DLGamer
+    34: "https://www.google.com/search?q={query}+buy+Noctre",        # Noctre
+    35: "https://www.google.com/search?q={query}+buy+DreamGame",     # DreamGame
+}
+
 # Маппинг магазинов CheapShark на платформы
 STORE_PLATFORM_MAP = {
     1: "pc",    # Steam
@@ -231,6 +252,27 @@ CONSOLE_STORES = {
         "url_template": "https://www.nintendo.com/us/search/#q={query}&p=1&cat=gme",
     },
 }
+
+
+def _build_direct_link(store_id: int, steam_app_id: str | None, game_title: str) -> str:
+    """Построить прямую ссылку на магазин по storeID."""
+    from urllib.parse import quote_plus
+
+    # Steam — прямая ссылка через steamAppID
+    if store_id == 1 and steam_app_id:
+        return f"https://store.steampowered.com/app/{steam_app_id}/"
+
+    # Проверяем маппинг по storeID
+    template = STORE_LINK_MAP.get(store_id)
+    if template:
+        query = quote_plus(game_title)
+        if steam_app_id and "{steam_app_id}" in template:
+            return template.format(steam_app_id=steam_app_id)
+        return template.format(query=query)
+
+    # Fallback — поиск в Google
+    query = quote_plus(game_title)
+    return f"https://www.google.com/search?q={query}+buy"
 
 
 def _build_store_link(store_name: str, steam_app_id: str | None, game_title: str) -> str:
@@ -392,15 +434,8 @@ async def get_game_deals(
                     usd_price = float(deal.get("price", 0))
                     converted = convert_price(usd_price, target_currency, rates)
 
-                    # Прямая ссылка: Steam через steamAppID, остальные — CheapShark redirect
-                    if store_id == "1" and steam_app_id:
-                        link = f"https://store.steampowered.com/app/{steam_app_id}/"
-                    elif steam_app_id:
-                        # Ищем магазин в STORE_PLATFORM_MAP чтобы построить ссылку
-                        store_name = stores.get(store_id, {}).get("name", "")
-                        link = _build_store_link(store_name, steam_app_id, game_title)
-                    else:
-                        link = f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}"
+                    # Прямая ссылка через storeID
+                    link = _build_direct_link(int(store_id), steam_app_id, game_title)
 
                     # Ссылка на страницу игры
                     if steam_app_id:
@@ -508,13 +543,8 @@ async def search_deals(
                     game_title = deal.get("title", "Без названия")
                     steam_id = steam_ids.get(game_title.lower())
 
-                    # Прямая Steam-ссылка или ссылка на магазин
-                    if store_id == "1" and steam_id:
-                        link = f"https://store.steampowered.com/app/{steam_id}/"
-                    elif steam_id:
-                        link = _build_store_link(store_info["name"], steam_id, game_title)
-                    else:
-                        link = f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}"
+                    # Прямая ссылка через storeID
+                    link = _build_direct_link(int(store_id), steam_id, game_title)
 
                     # Ссылка на страницу игры
                     if steam_id:
@@ -811,12 +841,16 @@ async def get_regional_prices(game_title: str, target_currency: str = "USD", fil
                     usd_price = float(deal.get("salePrice", 0))
                     converted = convert_price(usd_price, target_currency, rates)
 
+                    # Прямая ссылка через storeID
+                    deal_store_id = int(deal.get("storeID", 0))
+                    link = _build_direct_link(deal_store_id, None, game_title)
+
                     regional_deals[region].append({
                         "store": store_info["name"],
                         "price_usd": usd_price,
                         "price_converted": converted,
                         "savings": round(float(deal.get("savings", 0)), 1),
-                        "link": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}",
+                        "link": link,
                     })
 
                 # Сортируем регионы по минимальной цене
@@ -866,11 +900,15 @@ async def get_best_price(game_title: str) -> dict | None:
                 # Находим лучшую цену
                 best_deal = min(deals, key=lambda x: float(x.get("salePrice", 9999)))
 
+                # Прямая ссылка через storeID
+                best_store_id = int(best_deal.get("storeID", 0))
+                link = _build_direct_link(best_store_id, None, game_title)
+
                 return {
                     "title": best_deal.get("title", game_title),
                     "price_usd": float(best_deal.get("salePrice", 0)),
                     "store": best_deal.get("storeID", ""),
-                    "link": f"https://www.cheapshark.com/redirect?dealID={best_deal.get('dealID', '')}",
+                    "link": link,
                     "savings": round(float(best_deal.get("savings", 0)), 1),
                 }
 
@@ -963,6 +1001,10 @@ async def get_regional_deals(game_title: str, target_currency: str = "USD", filt
                     usd_price = float(deal.get("salePrice", 0))
                     converted = convert_price(usd_price, target_currency, rates)
 
+                    # Прямая ссылка через storeID
+                    deal_store_id = int(deal.get("storeID", 0))
+                    link = _build_direct_link(deal_store_id, None, game_title)
+
                     result.append({
                         "title": deal.get("title", game_title),
                         "store": store_info["name"],
@@ -970,7 +1012,7 @@ async def get_regional_deals(game_title: str, target_currency: str = "USD", filt
                         "price_usd": usd_price,
                         "price_converted": converted,
                         "savings": round(float(deal.get("savings", 0)), 1),
-                        "link": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID', '')}",
+                        "link": link,
                         "normal_price": deal.get("normalPrice", "?"),
                     })
 

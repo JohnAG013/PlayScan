@@ -11,6 +11,7 @@ from database import (
     add_alert, get_user_alerts, remove_alert,
 )
 from services import search_games, get_game_deals, search_deals, get_stores_list, enrich_deals_with_official_links, get_regional_prices, ALL_REGIONS, search_console_game
+from price_fetcher import search_playfetch
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -595,16 +596,16 @@ async def successful_payment_handler(message: types.Message) -> None:
 async def command_about_handler(message: types.Message) -> None:
     try:
         await message.answer(
-            "ℹ️ <b>PlayScan</b> v1.0\n\n"
+            "ℹ️ <b>PlayScan</b> v1.1\n\n"
             "Бот для поиска лучших цен на игры.\n"
             "Создан по заказу пользователей.\n\n"
             "<b>Возможности:</b>\n"
             "• Поиск цен на PC\n"
-            "• Ссылки на консольные магазины\n"
+            "• Цены на PlayStation, Xbox, Nintendo\n"
             "• Цены по регионам\n"
             "• Оповещения о скидках\n\n"
             "<b>Автор:</b> John\n"
-            "<b>Версия:</b> 1.0"
+            "<b>Версия:</b> 1.1"
         )
     except Exception as e:
         logger.error(f"Ошибка в /about: {e}")
@@ -938,24 +939,28 @@ async def callback_search_again(callback: types.CallbackQuery) -> None:
         currency = profile["currency"] if profile else "USD"
         device = profile["device"] if profile else "all"
 
-        # Поиск в зависимости от платформы
-        if device in ("ps", "xbox", "nintendo"):
-            # Консольные платформы
-            deals = await search_console_game(query, device)
-        else:
-            # PC поиск
-            deals = await search_deals(query, limit=50, target_currency=currency, target_platform=device)
+        # Гибридный подход: сначала PlayFetch, потом CheapShark
+        deals = []
 
-            # Если выбрана платформа "all", добавляем ссылки на консоли (параллельно)
-            if device == "all":
-                import asyncio
-                console_results = await asyncio.gather(
-                    search_console_game(query, "ps"),
-                    search_console_game(query, "xbox"),
-                    search_console_game(query, "nintendo"),
-                )
-                for result in console_results:
-                    deals.extend(result)
+        # Сначала пробуем PlayFetch (Steam, PS, Xbox, GOG, Nintendo)
+        try:
+            pf_deals = await search_playfetch(query, user_region=profile.get("region", "us"), device=device, target_currency=currency)
+            if pf_deals:
+                deals.extend(pf_deals)
+        except Exception as e:
+            logger.warning(f"PlayFetch failed for {query}: {e}")
+
+        # Если PlayFetch не вернул результатов для PC — пробуем CheapShark
+        if not deals or (device in ("pc", "all") and not any(d["platform"] == "pc" for d in deals)):
+            try:
+                cs_deals = await search_deals(query, limit=50, target_currency=currency, target_platform=device)
+                # Добавляем только те, которых нет в PlayFetch (для дедупликации)
+                existing_titles = {d["title"].lower() for d in deals}
+                for d in cs_deals:
+                    if d["title"].lower() not in existing_titles:
+                        deals.append(d)
+            except Exception as e:
+                logger.warning(f"CheapShark failed for {query}: {e}")
 
         if not deals:
             await callback.message.edit_text(f"❌ По запросу <b>{escape(query)}</b> ничего не найдено.")
@@ -998,24 +1003,28 @@ async def search_game_handler(message: types.Message) -> None:
             f"🔍 Ищу: <b>{escape(game_query)}</b>...",
         )
 
-        # Поиск в зависимости от платформы
-        if device in ("ps", "xbox", "nintendo"):
-            # Консольные платформы
-            deals = await search_console_game(game_query, device)
-        else:
-            # PC поиск
-            deals = await search_deals(game_query, limit=50, target_currency=currency, target_platform=device)
+        # Гибридный подход: сначала PlayFetch, потом CheapShark
+        deals = []
 
-            # Если выбрана платформа "all", добавляем ссылки на консоли (параллельно)
-            if device == "all":
-                import asyncio
-                console_results = await asyncio.gather(
-                    search_console_game(game_query, "ps"),
-                    search_console_game(game_query, "xbox"),
-                    search_console_game(game_query, "nintendo"),
-                )
-                for result in console_results:
-                    deals.extend(result)
+        # Сначала пробуем PlayFetch (Steam, PS, Xbox, GOG, Nintendo)
+        try:
+            pf_deals = await search_playfetch(game_query, user_region=profile.get("region", "us"), device=device, target_currency=currency)
+            if pf_deals:
+                deals.extend(pf_deals)
+        except Exception as e:
+            logger.warning(f"PlayFetch failed for {game_query}: {e}")
+
+        # Если PlayFetch не вернул результатов для PC — пробуем CheapShark
+        if not deals or (device in ("pc", "all") and not any(d["platform"] == "pc" for d in deals)):
+            try:
+                cs_deals = await search_deals(game_query, limit=50, target_currency=currency, target_platform=device)
+                # Добавляем только те, которых нет в PlayFetch (для дедупликации)
+                existing_titles = {d["title"].lower() for d in deals}
+                for d in cs_deals:
+                    if d["title"].lower() not in existing_titles:
+                        deals.append(d)
+            except Exception as e:
+                logger.warning(f"CheapShark failed for {game_query}: {e}")
 
         if not deals:
             games = await search_games(game_query, limit=10)
