@@ -943,20 +943,23 @@ async def callback_search_again(callback: types.CallbackQuery) -> None:
             pf_deals = await search_playfetch(query, user_region=profile.get("region", "us"), device=device, target_currency=currency)
             if pf_deals:
                 deals.extend(pf_deals)
+                logger.info(f"PlayFetch found {len(pf_deals)} deals for {query}")
         except Exception as e:
             logger.warning(f"PlayFetch failed for {query}: {e}")
 
-        # Если PlayFetch не вернул результатов для PC — пробуем CheapShark
-        if not deals or (device in ("pc", "all") and not any(d["platform"] == "pc" for d in deals)):
-            try:
-                cs_deals = await search_deals(query, limit=50, target_currency=currency, target_platform=device)
-                # Добавляем только те, которых нет в PlayFetch (для дедупликации)
-                existing_titles = {d["title"].lower() for d in deals}
-                for d in cs_deals:
-                    if d["title"].lower() not in existing_titles:
-                        deals.append(d)
-            except Exception as e:
-                logger.warning(f"CheapShark failed for {query}: {e}")
+        # CheapShark для PC магазинов (Humble, Fanatical, Epic и т.д.)
+        # Всегда добавляем CheapShark результаты для PC
+        try:
+            cs_deals = await search_deals(query, limit=50, target_currency=currency, target_platform="pc")
+            # Добавляем только те, которых нет в PlayFetch (для дедупликации)
+            existing_titles = {d["title"].lower() for d in deals}
+            for d in cs_deals:
+                if d["title"].lower() not in existing_titles:
+                    deals.append(d)
+            if cs_deals:
+                logger.info(f"CheapShark found {len(cs_deals)} deals for {query}")
+        except Exception as e:
+            logger.warning(f"CheapShark failed for {query}: {e}")
 
         if not deals:
             await callback.message.edit_text(f"❌ По запросу <b>{escape(query)}</b> ничего не найдено.")
@@ -1007,20 +1010,23 @@ async def search_game_handler(message: types.Message) -> None:
             pf_deals = await search_playfetch(game_query, user_region=profile.get("region", "us"), device=device, target_currency=currency)
             if pf_deals:
                 deals.extend(pf_deals)
+                logger.info(f"PlayFetch found {len(pf_deals)} deals for {game_query}")
         except Exception as e:
             logger.warning(f"PlayFetch failed for {game_query}: {e}")
 
-        # Если PlayFetch не вернул результатов для PC — пробуем CheapShark
-        if not deals or (device in ("pc", "all") and not any(d["platform"] == "pc" for d in deals)):
-            try:
-                cs_deals = await search_deals(game_query, limit=50, target_currency=currency, target_platform=device)
-                # Добавляем только те, которых нет в PlayFetch (для дедупликации)
-                existing_titles = {d["title"].lower() for d in deals}
-                for d in cs_deals:
-                    if d["title"].lower() not in existing_titles:
-                        deals.append(d)
-            except Exception as e:
-                logger.warning(f"CheapShark failed for {game_query}: {e}")
+        # CheapShark для PC магазинов (Humble, Fanatical, Epic и т.д.)
+        # Всегда добавляем CheapShark результаты для PC
+        try:
+            cs_deals = await search_deals(game_query, limit=50, target_currency=currency, target_platform="pc")
+            # Добавляем только те, которых нет в PlayFetch (для дедупликации)
+            existing_titles = {d["title"].lower() for d in deals}
+            for d in cs_deals:
+                if d["title"].lower() not in existing_titles:
+                    deals.append(d)
+            if cs_deals:
+                logger.info(f"CheapShark found {len(cs_deals)} deals for {game_query}")
+        except Exception as e:
+            logger.warning(f"CheapShark failed for {game_query}: {e}")
 
         if not deals:
             games = await search_games(game_query, limit=10)

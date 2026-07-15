@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import aiohttp
 
 from playfetch import (
     PlayFetchOrchestrator,
@@ -17,6 +18,7 @@ from playfetch import (
 )
 from playfetch.models import GameProduct
 from database import get_cached_game, cache_game
+from services import _get_exchange_rates, convert_price
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +78,7 @@ def _platform_to_playfetch(device: str) -> list[str]:
     return mapping.get(device.lower(), ["PC", "PS5", "Xbox Series X|S"])
 
 
-def _product_to_deal(product: GameProduct) -> dict:
+def _product_to_deal(product: GameProduct, target_currency: str = "USD", rates: dict = None) -> dict:
     """Конвертирует GameProduct из PlayFetch в формат deal бота."""
     platform_map = {
         "PC": "pc",
@@ -87,11 +89,18 @@ def _product_to_deal(product: GameProduct) -> dict:
         "Switch": "nintendo",
     }
 
+    raw_price = product.raw_price
+    price_converted = None
+
+    # Конвертируем цену если нужно
+    if raw_price and rates and target_currency != "USD":
+        price_converted = convert_price(raw_price, target_currency, rates)
+
     deal = {
         "title": product.title,
-        "price_usd": f"{product.raw_price:.2f}" if product.raw_price is not None else "?",
-        "price_converted": None,
-        "currency": product.currency,
+        "price_usd": f"{raw_price:.2f}" if raw_price is not None else "?",
+        "price_converted": f"{price_converted:.2f}" if price_converted else None,
+        "currency": target_currency,
         "normal_price": "?",
         "savings": 0,
         "store": product.store_name,
@@ -121,17 +130,24 @@ async def search_playfetch(
     regions = _region_to_playfetch(user_region)
     platforms = _platform_to_playfetch(device)
 
+    # Получаем курсы валют для конвертации
+    async with aiohttp.ClientSession() as session:
+        rates = await _get_exchange_rates(session)
+
     # Проверяем кэш в Google Sheets для каждого региона и платформы
     cached_deals = []
     for region in regions:
         for platform in platforms:
             cached = await get_cached_game(query, "PlayFetch", region, platform)
             if cached:
+                raw_price = cached["raw_price"]
+                price_converted = convert_price(raw_price, target_currency, rates) if raw_price else None
+
                 deal = {
                     "title": cached["title"],
-                    "price_usd": f"{cached['raw_price']:.2f}" if cached["raw_price"] else "?",
-                    "price_converted": None,
-                    "currency": cached["currency"],
+                    "price_usd": f"{raw_price:.2f}" if raw_price else "?",
+                    "price_converted": f"{price_converted:.2f}" if price_converted else None,
+                    "currency": target_currency,
                     "normal_price": "?",
                     "savings": 0,
                     "store": cached["store"],
@@ -161,7 +177,7 @@ async def search_playfetch(
         logger.error(f"PlayFetch error for {query}: {e}")
         return []
 
-    deals = [_product_to_deal(p) for p in products]
+    deals = [_product_to_deal(p, target_currency, rates) for p in products]
 
     # Сохраняем в кэш Google Sheets
     for deal in deals:
@@ -174,7 +190,7 @@ async def search_playfetch(
             title=deal["title"],
             price=deal["price_usd"],
             raw_price=float(deal["price_usd"]) if deal["price_usd"] not in ("?", "", None) else None,
-            currency=deal["currency"],
+            currency=target_currency,
             url=deal["link"],
         )
 
