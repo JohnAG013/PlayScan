@@ -50,6 +50,12 @@ _alerts_cache: dict[int, list[dict]] = {}
 _alerts_sheet = None
 _alerts_loaded = False
 
+# Кэш игр в Google Sheets
+_games_cache: dict[str, dict] = {}
+_games_sheet = None
+_games_loaded = False
+_GAMES_CACHE_TTL = 24 * 60 * 60  # 24 часа
+
 # Кэш лимитов поиска (считает за текущий день)
 _search_counts: dict[str, int] = {}  # "user_id:YYYY-MM-DD" -> count
 DAILY_SEARCH_LIMIT = 5
@@ -135,6 +141,7 @@ async def add_user(user_id: int, username: str | None) -> bool:
             "USD",
             "all",
             "user",
+            "global",
         ]
         ws.append_row(row_data, value_input_option="RAW")
 
@@ -144,6 +151,7 @@ async def add_user(user_id: int, username: str | None) -> bool:
             "currency": "USD",
             "device": "all",
             "role": "user",
+            "region": "global",
         }
 
         logger.info(f"Пользователь {user_id} (@{username}) добавлен в Google Sheets.")
@@ -205,7 +213,7 @@ async def set_user_region(user_id: int, region: str) -> bool:
         ws = _get_worksheet()
         cell = ws.find(str(user_id), in_column=1)
         if cell:
-            ws.update_cell(cell.row, 6, region)
+            ws.update_cell(cell.row, 7, region)
             _users_cache[user_id]["region"] = region
             return True
     except Exception as e:
@@ -359,6 +367,127 @@ async def get_all_active_alerts() -> list[dict]:
             })
 
     return all_alerts
+
+
+# ─────────────── Кэш игр в Google Sheets ───────────────
+
+def _get_games_worksheet():
+    """Получить лист Games для кэширования цен."""
+    global _games_sheet
+    if _games_sheet is None:
+        try:
+            creds = Credentials.from_service_account_file(
+                SERVICE_ACCOUNT_FILE, scopes=SCOPES
+            )
+            client = gspread.authorize(creds)
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+
+            try:
+                _games_sheet = spreadsheet.worksheet("Games")
+            except gspread.exceptions.WorksheetNotFound:
+                _games_sheet = spreadsheet.add_worksheet(title="Games", rows=1000, cols=10)
+                _games_sheet.update("A1:J1", [
+                    ["game_name", "store", "region", "platform", "title", "price", "raw_price", "currency", "url", "updated_at"]
+                ])
+
+        except Exception as e:
+            logger.error(f"Ошибка подключения к листу Games: {e}")
+            raise
+    return _games_sheet
+
+
+def _load_games_cache():
+    """Загрузить кэш игр из Google Sheets."""
+    global _games_cache, _games_loaded
+    if _games_loaded:
+        return
+
+    try:
+        ws = _get_games_worksheet()
+        records = ws.get_all_records()
+
+        _games_cache.clear()
+        for row in records:
+            try:
+                game_name = row.get("game_name", "").lower()
+                if not game_name:
+                    continue
+                key = f"{game_name}|{row.get('store', '')}|{row.get('region', '')}|{row.get('platform', '')}"
+                _games_cache[key] = {
+                    "game_name": row.get("game_name", ""),
+                    "store": row.get("store", ""),
+                    "region": row.get("region", ""),
+                    "platform": row.get("platform", ""),
+                    "title": row.get("title", ""),
+                    "price": row.get("price", ""),
+                    "raw_price": float(row.get("raw_price", 0)) if row.get("raw_price") else None,
+                    "currency": row.get("currency", "USD"),
+                    "url": row.get("url", ""),
+                    "updated_at": row.get("updated_at", ""),
+                }
+            except (ValueError, TypeError):
+                continue
+
+        _games_loaded = True
+        logger.info(f"Загружено {len(_games_cache)} записей игр из Google Sheets")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки кэша игр: {e}")
+        _games_loaded = True
+
+
+async def get_cached_game(game_name: str, store: str, region: str, platform: str) -> dict | None:
+    """Получить игру из кэша, если она не устарела."""
+    import time
+    _load_games_cache()
+
+    key = f"{game_name.lower()}|{store}|{region}|{platform}"
+    entry = _games_cache.get(key)
+    if not entry:
+        return None
+
+    # Проверяем возраст записи
+    try:
+        from datetime import datetime
+        updated = datetime.strptime(entry["updated_at"], "%Y-%m-%d %H:%M:%S")
+        age = time.time() - updated.timestamp()
+        if age > _GAMES_CACHE_TTL:
+            return None
+    except (ValueError, KeyError):
+        return None
+
+    return entry
+
+
+async def cache_game(game_name: str, store: str, region: str, platform: str,
+                     title: str, price: str, raw_price: float | None,
+                     currency: str, url: str) -> bool:
+    """Сохранить игру в кэш Google Sheets."""
+    from datetime import datetime
+    _load_games_cache()
+
+    try:
+        ws = _get_games_worksheet()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row_data = [game_name, store, region, platform, title, price, raw_price or "", currency, url, now]
+        ws.append_row(row_data, value_input_option="RAW")
+
+        key = f"{game_name.lower()}|{store}|{region}|{platform}"
+        _games_cache[key] = {
+            "game_name": game_name,
+            "store": store,
+            "region": region,
+            "platform": platform,
+            "title": title,
+            "price": price,
+            "raw_price": raw_price,
+            "currency": currency,
+            "url": url,
+            "updated_at": now,
+        }
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка кэширования игры: {e}")
+        return False
 
 
 async def trigger_alert(user_id: int, game_title: str) -> bool:

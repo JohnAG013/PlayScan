@@ -679,7 +679,6 @@ async def command_profile_handler(message: types.Message) -> None:
 
         await message.answer(
             f"👤 <b>Твой профиль{username_display}:</b>\n\n"
-            f"🏷️ Роль: <b>{role_label}</b>\n"
             f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
             f"📱 Устройство: <b>{dev_label}</b>\n"
             f"🌍 Регион: <b>{region_label}</b>\n\n"
@@ -735,10 +734,6 @@ async def callback_set_currency(callback: types.CallbackQuery) -> None:
         cur_symbol = CURRENCIES.get(cur, cur)
         dev_label = PLATFORM_LABELS.get(dev, dev)
 
-        from services import ALL_REGIONS
-        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
-        region_label = region_info["name"]
-
         ROLE_LABELS = {
             "user": "👤 Пользователь",
             "admin": "🛡️ Админ",
@@ -746,6 +741,10 @@ async def callback_set_currency(callback: types.CallbackQuery) -> None:
             "creator": "👑 Создатель",
         }
         role_label = ROLE_LABELS.get(role, role)
+
+        from services import ALL_REGIONS
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
@@ -756,7 +755,6 @@ async def callback_set_currency(callback: types.CallbackQuery) -> None:
         await callback.message.edit_text(
             f"✅ <b>Выбрано:</b> Валюта {currency} ({symbol})\n\n"
             f"👤 <b>Твой профиль{username_display}:</b>\n\n"
-            f"🏷️ Роль: <b>{role_label}</b>\n"
             f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
             f"📱 Устройство: <b>{dev_label}</b>\n"
             f"🌍 Регион: <b>{region_label}</b>\n\n"
@@ -808,10 +806,6 @@ async def callback_set_device(callback: types.CallbackQuery) -> None:
         cur_symbol = CURRENCIES.get(cur, cur)
         dev_label = PLATFORM_LABELS.get(dev, dev)
 
-        from services import ALL_REGIONS
-        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
-        region_label = region_info["name"]
-
         ROLE_LABELS = {
             "user": "👤 Пользователь",
             "admin": "🛡️ Админ",
@@ -819,6 +813,10 @@ async def callback_set_device(callback: types.CallbackQuery) -> None:
             "creator": "👑 Создатель",
         }
         role_label = ROLE_LABELS.get(role, role)
+
+        from services import ALL_REGIONS
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
@@ -829,7 +827,6 @@ async def callback_set_device(callback: types.CallbackQuery) -> None:
         await callback.message.edit_text(
             f"✅ <b>Выбрано:</b> Платформа {label}\n\n"
             f"👤 <b>Твой профиль{username_display}:</b>\n\n"
-            f"🏷️ Роль: <b>{role_label}</b>\n"
             f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
             f"📱 Устройство: <b>{dev_label}</b>\n"
             f"🌍 Регион: <b>{region_label}</b>\n\n"
@@ -894,9 +891,6 @@ async def callback_set_region(callback: types.CallbackQuery) -> None:
         cur_symbol = CURRENCIES.get(cur, cur)
         dev_label = PLATFORM_LABELS.get(dev, dev)
 
-        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
-        region_label = region_info["name"]
-
         ROLE_LABELS = {
             "user": "👤 Пользователь",
             "admin": "🛡️ Админ",
@@ -904,6 +898,9 @@ async def callback_set_region(callback: types.CallbackQuery) -> None:
             "creator": "👑 Создатель",
         }
         role_label = ROLE_LABELS.get(role, role)
+
+        region_info = ALL_REGIONS.get(region, ALL_REGIONS["global"])
+        region_label = region_info["name"]
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"💱 Валюта: {cur} ({cur_symbol})", callback_data="profile:currency")],
@@ -914,7 +911,6 @@ async def callback_set_region(callback: types.CallbackQuery) -> None:
         await callback.message.edit_text(
             f"✅ <b>Выбрано:</b> Регион {region_name}\n\n"
             f"👤 <b>Твой профиль{username_display}:</b>\n\n"
-            f"🏷️ Роль: <b>{role_label}</b>\n"
             f"💱 Валюта: <b>{cur}</b> ({cur_symbol})\n"
             f"📱 Устройство: <b>{dev_label}</b>\n"
             f"🌍 Регион: <b>{region_label}</b>\n\n"
